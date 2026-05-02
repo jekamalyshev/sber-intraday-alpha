@@ -5,6 +5,7 @@ scipy>=1.11.0
 
 # Machine learning
 scikit-learn>=1.4.0
+xgboost>=2.0.0
 
 # Technical indicators
 pandas_ta>=0.3.14b

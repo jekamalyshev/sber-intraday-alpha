@@ -1,202 +1,180 @@
-# 📈 SBER Intraday Alpha — 5-Minute Candle Research Pipeline
+# 📈 SBER Intraday Alpha — 5-Minute ML Research Pipeline
 
-> **Quantitative research pipeline for intraday trading of Sberbank (MOEX: SBER) stocks.**  
-> Feature engineering on raw 5-minute OHLCV candles → supervised ML model → probability calibration.
-
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
-[![Jupyter](https://img.shields.io/badge/Jupyter-Notebook-orange?logo=jupyter)](https://jupyter.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-research-yellow)]()
+> **Research pipeline для поиска статистических закономерностей в 5-минутных данных акций Сбербанка (MOEX: SBER).**  
+> Цель: разработать торговую стратегию с положительным математическим ожиданием после учёта комиссий и slippage.
 
 ---
 
-## 🗂️ Project Structure
+## Архитектура
 
 ```
 sber-intraday-alpha/
-│
 ├── notebooks/
-│   └── sber_intraday_pipeline.ipynb   # Main research notebook
-│
-├── data/
-│   └── README.md                      # Instructions for placing raw data
-│
+│   └── sber_intraday_pipeline.ipynb   # Основной research-ноутбук (11 ячеек)
 ├── src/
-│   └── features.py                    # Feature engineering functions (extracted from notebook)
-│
-├── requirements.txt                   # Python dependencies
-├── .gitignore                         # Standard Python / Jupyter gitignore
-└── README.md                          # This file
+│   └── models.py                       # Model factory, calibration, evaluate_model
+├── data/
+│   └── Сбербанк/
+│       └── year_result.csv             # Сырые 5m-котировки Finam (не включены в репо)
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 🎯 Research Goal
+## Пайплайн (ноутбук)
 
-Find a **positive-expectancy signal** on 5-minute SBER candles by:
-
-1. Engineering interpretable price-action features from raw candle geometry
-2. Adding rolling context features (volatility, volume regime)
-3. Adding calendar / session-aware features
-4. Adding technical indicators via `pandas_ta`
-5. Training a baseline classifier to predict **next-candle direction** (green / red)
-6. Evaluating with strict **time-series cross-validation** (no shuffle, chronological split)
-7. Calibrating output probabilities with **Platt scaling**
-
-> ⚠️ **This is a research notebook, not a production trading system.** All results must be validated out-of-sample before any capital allocation.
-
----
-
-## 📦 Data Source
-
-Data is downloaded from [Finam Export](https://www.finam.ru/profile/moex-akcii/sberbank/export/) in the standard format:
-
-```
-<TICKER>;<PER>;<DATE>;<TIME>;<OPEN>;<HIGH>;<LOW>;<CLOSE>;<VOL>
-SBER;5;20200101;100000;262.50;263.10;262.30;262.90;1540200
-...
-```
-
-Place the raw CSV file at:
-```
-./data/Сбербанк/year_result.csv
-```
-
-or update `DATA_PATH` in **Cell 5** of the notebook.
+| Ячейка | Что делает |
+|--------|------------|
+| **1** | Импорты, совместимость sklearn, версии зависимостей |
+| **2** | `series_to_supervised` — преобразование ряда в supervised dataset |
+| **3** | Feature engineering: геометрия свечи, returns, rolling context, calendar, TA-индикаторы |
+| **4** | Master pipeline builder, leakage guard, `build_X_y_for_model` |
+| **5** | Загрузка данных Finam, запуск полного пайплайна |
+| **6** | EDA: распределения признаков, корреляционная матрица |
+| **7** | Хронологический split Train 70% / Valid 15% / Calib 15% |
+| **8** | **XGBoost classifier** — обучение с early stopping на Valid |
+| **9** | Platt scaling (CalibratedClassifierCV, cv='prefit') на Calib |
+| **10** | Сводная таблица метрик: XGB vs XGB+Calib |
+| **11** | **Feature Importance**: built-in Gain + Permutation Importance (Valid AUC) |
 
 ---
 
-## 🧱 Feature Groups
+## Признаки
 
-| Group | Count | Description |
-|---|---|---|
-| **Candle geometry** | ~12 | Body, wicks, ratios, direction, doji flag |
-| **Returns / momentum** | ~8 | `ret_1`, `ret_3`, `ret_6`, `ret_12`, gap, close-vs-prev-high/low |
-| **Rolling context** | ~18 | Mean/std/zscore for range, body, close (windows 6, 12, 24) |
-| **Volume regime** | ~9 | `vol_ma_w`, `vol_ratio_w`, `vol_std_w`, `signed_vol` |
-| **Calendar / session** | ~14 | Hour, minute, day-of-week, bar-in-day, cyclic sin/cos encodings |
-| **Technical indicators** | ~20 | EMA, SMA, RSI, Stoch, MACD, ATR, Bollinger Bands, OBV |
-| **Supervised lags** | dynamic | `series_to_supervised(n_in=5)` — 5 bars of lagged features |
+### Геометрия свечи
+- `candle_body`, `body_abs`, `candle_range`, `upper_wick`, `lower_wick`
+- `body_to_range`, `upper_wick_to_range`, `lower_wick_to_range`
+- `close_pos_in_range`, `open_pos_in_range`
+- `direction`, `is_green`, `is_red`, `is_doji_like`
+
+### Returns & momentum
+- `ret_1`, `ret_6`, `ret_12`, `ret_24` — pct_change за 5m / 30m / 60m / 120m
+- `gap_from_prev_close`, `close_to_prev_high`, `close_to_prev_low`
+
+### Rolling context (windows=6, 12, 24)
+- `range_mean_W`, `range_std_W`, `range_zscore_W`
+- `close_ma_W`, `close_vs_ma_W`, `close_zscore_W`
+- `vol_ma_W`, `vol_ratio_W`
+
+### Calendar / session
+- `hour`, `dayofweek`, `hour_sin/cos`, `dow_sin/cos`
+- `minutes_from_session_open`, `is_opening_30m`, `is_first_hour`, `bar_in_day`
+
+### Технические индикаторы (pandas_ta)
+- EMA 10/20, SMA 20, RSI 14, ATR 14, NATR 14
+- MACD (12/26/9), Bollinger Bands (20), Stochastic, OBV
+- `price_vs_ema_10/20`, `close_pos_in_bbands`
+
+### Price × Volume
+- `body_x_vol`, `signed_vol`, `money_flow_proxy`
 
 ---
 
-## 🎓 Target Variable
+## Модель
+
+### XGBoost (Cell 8)
 
 ```python
-target_is_green_next = 1  # if CLOSE[t+1] > OPEN[t+1]
-target_is_green_next = 0  # otherwise
+XGBClassifier(
+    n_estimators=500,
+    max_depth=4,              # неглубокие деревья → меньше overfit
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.7,
+    min_child_weight=20,      # минимум сэмплов в листе
+    reg_alpha=0.1,            # L1
+    reg_lambda=1.0,           # L2
+    scale_pos_weight=neg/pos, # компенсация дисбаланса классов
+    early_stopping_rounds=30, # останавливаемся при деградации LogLoss на Valid
+)
 ```
 
-This is a binary classification problem: predict whether the **next 5-minute candle** will close above its open.
+> **StandardScaler не нужен** — деревья инвариантны к масштабу признаков.
+
+### Calibration (Cell 9)
+
+Platt scaling через `CalibratedClassifierCV(cv='prefit')` на отдельном calib-сегменте.  
+Калибровка улучшает Log Loss и Brier Score, не меняя AUC.
 
 ---
 
-## 🔀 Train / Validation / Calibration Split
+## Метрики оценки
 
-Strictly **chronological**, no shuffling:
+| Метрика | Почему важна |
+|---------|-------------|
+| **AUC-ROC** | Дискриминирующая способность, инвариантна к порогу |
+| **Log Loss** | Качество вероятностей — ключевая метрика для calibration |
+| **Brier Score** | Вероятностная точность, интерпретируется как MSE по вероятностям |
+| **Accuracy** | Ориентир, но не основная метрика при дисбалансе классов |
 
-```
-|────────── Train 70% ──────────|── Valid 15% ──|── Calibration 15% ──|
-```
-
-- **Train** — model fitting
-- **Validation** — hyperparameter evaluation and metrics reporting
-- **Calibration** — Platt scaling (`CalibratedClassifierCV(method='sigmoid', cv='prefit')`)
-
----
-
-## 📊 Models
-
-| Model | Description |
-|---|---|
-| `LogisticRegression` | Baseline linear model with `StandardScaler`, `class_weight='balanced'` |
-| `GradientBoostingClassifier` | Tree-based ensemble (imported, ready to plug in) |
-| `CalibratedClassifierCV` | Probability calibration via Platt scaling on holdout calibration set |
+> **Baseline:** случайная модель при 50/50 классах → AUC=0.50, LogLoss=ln(2)≈0.693, Brier=0.25
 
 ---
 
-## 📐 Metrics
+## Feature Importance (Cell 11)
 
-- **Accuracy** — raw directional hit rate
-- **ROC AUC** — discriminative ability
-- **Log Loss** — quality of probability estimates
-- **Brier Score** — mean squared error of probabilities (lower = better)
-- **Calibration Curve** — reliability diagram (predicted vs actual frequency)
-- **Classification Report** — precision / recall / F1 per class
-- **Confusion Matrix** — error breakdown
+**Два типа важности признаков:**
 
----
+- **Gain (built-in)** — средний прирост качества на сплитах по признаку во всех деревьях
+- **Permutation Importance (Valid)** — насколько снижается AUC при случайном перемешивании признака на `X_valid`
 
-## ⚠️ Known Biases & Risks
-
-| Bias | Mitigation in this notebook |
-|---|---|
-| **Look-ahead bias** | All features use only `shift(>=1)` or current-bar-close values |
-| **Survivorship bias** | Not mitigated — only SBER data used, single surviving issuer |
-| **Overfitting** | Chronological split; calibration on separate holdout |
-| **Regime shift** | Not explicitly modeled — results are period-specific |
-| **Transaction costs** | Not modeled at this stage — pure signal research |
-| **Warm-up NaNs** | `min_periods=w` on rolling windows; first rows have NaN features |
+Permutation importance честнее для оценки реальной предсказательной силы, так как не зависит от структуры дерева.  
+Признаки с importance ≤ 0 — кандидаты на удаление из feature set.
 
 ---
 
-## 🚀 Quick Start
+## Быстрый старт
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/jekamalyshev/sber-intraday-alpha.git
 cd sber-intraday-alpha
-
-# 2. Create virtual environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
+```
 
-# 4. Place data
-mkdir -p "data/Сбербанк"
-# copy your year_result.csv to data/Сбербанк/year_result.csv
+1. Скачать 5-минутные данные SBER с [Finam Export](https://www.finam.ru/profile/moex-akcii/sberbank/export/)
+2. Положить CSV в `data/Сбербанк/year_result.csv`
+3. Открыть `notebooks/sber_intraday_pipeline.ipynb` и запустить все ячейки
 
-# 5. Launch notebook
-jupyter lab notebooks/sber_intraday_pipeline.ipynb
+---
+
+## Методологические гарантии
+
+- ✅ **No look-ahead bias** — все признаки используют только данные текущего и прошлых баров
+- ✅ **Хронологический split** — Train / Valid / Calib идут строго по времени, без перемешивания
+- ✅ **Early stopping только на Valid** — веса модели обновляются только по Train
+- ✅ **Калибровка на отдельном Calib** — sigmoid обучается на данных, не виденных при обучении XGB
+- ✅ **min_periods=w** в rolling — защита от частичных окон на разогреве
+- ⚠️ **Survivorship bias** — в данных только один тикер (SBER), выжившая компания
+- ⚠️ **Статичный split** — следующий шаг: walk-forward validation
+
+---
+
+## Следующие шаги
+
+- [ ] Walk-forward validation (expanding window)
+- [ ] Убрать признаки с permutation importance ≤ 0 → переобучить
+- [ ] Hyperparameter tuning (Optuna)
+- [ ] Симуляция транзакционных издержек (комиссия MOEX + slippage)
+- [ ] Regime detection (HMM / rolling volatility)
+- [ ] Meta-labeling для фильтрации сигналов с низким confidence
+
+---
+
+## Зависимости
+
+```
+pandas >= 2.0
+numpy >= 1.24
+scikit-learn >= 1.4
+xgboost >= 2.0
+pandas_ta >= 0.3.14b
+matplotlib >= 3.7
+seaborn >= 0.13
 ```
 
 ---
 
-## 📋 Requirements
+## Disclaimer
 
-See [requirements.txt](requirements.txt) for the full list. Key packages:
-
-- `pandas >= 2.0`
-- `numpy >= 1.24`
-- `scikit-learn >= 1.4`
-- `pandas_ta >= 0.3.14b`
-- `matplotlib >= 3.7`
-- `seaborn >= 0.13`
-- `jupyter >= 1.0`
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Walk-forward validation (expanding window)
-- [ ] GradientBoostingClassifier vs LogisticRegression comparison
-- [ ] Feature importance analysis (permutation importance)
-- [ ] Transaction cost simulation
-- [ ] Multi-ticker extension (GAZP, LKOH, GMKN)
-- [ ] Regime detection (HMM or rolling volatility regime)
-- [ ] Meta-labeling for signal filtering
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-## 👤 Author
-
-**Evgeniy Malishev** · Moscow, Russia  
-[github.com/jekamalyshev](https://github.com/jekamalyshev)
+Данный репозиторий является **исследовательским проектом**. Результаты бэктеста не гарантируют доходности в реальной торговле. Все стратегии требуют дополнительной валидации, учёта транзакционных издержек и тестирования на out-of-sample данных.
